@@ -6,6 +6,14 @@ import (
 	"github.com/insomniacslk/dhcp/dhcpv6"
 )
 
+type DHCPv4 struct {
+	*dhcpv4.DHCPv4
+}
+
+type DHCPv6 struct {
+	*dhcpv6.Message
+}
+
 // A Handler that responds to an DHCPv4 or DHCPv6 request.
 // The next handler will never be nil, but may be a no-op handler.
 // Handlers which act as middleware should call the next handler's Handle6
@@ -18,8 +26,8 @@ import (
 // by returning it unchanged. Returned errors should not be re-wrapped
 // if they are already HandlerError values.
 type Handler interface {
-	Handle4(req, resp *dhcpv4.DHCPv4, next func() error) error
-	Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() error) error
+	Handle4(req, resp DHCPv4, next func() error) error
+	Handle6(req, resp DHCPv6, next func() error) error
 }
 
 // A HandlerModule is a Handler that also implements
@@ -29,3 +37,8 @@ type HandlerModule interface {
 	caddy.Provisioner
 	Handler
 }
+
+// Interface guards
+var (
+	_ dhcpv6.DHCPv6 = (*DHCPv6)(nil)
+)

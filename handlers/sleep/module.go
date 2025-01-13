@@ -8,8 +8,6 @@ import (
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
-	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/insomniacslk/dhcp/dhcpv6"
 	"github.com/lion7/caddydhcp/handlers"
 	"go.uber.org/zap"
 )
@@ -34,14 +32,14 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(_ *dhcpv4.DHCPv4, _ *dhcpv4.DHCPv4, next func() error) error {
+func (m *Module) Handle4(_, _ handlers.DHCPv4, next func() error) error {
 	delay := time.Duration(m.Duration)
 	m.logger.Info("introducing delay in response", zap.Duration("delay", delay))
 	time.Sleep(delay)
 	return next()
 }
 
-func (m *Module) Handle6(_ *dhcpv6.Message, _ dhcpv6.DHCPv6, next func() error) error {
+func (m *Module) Handle6(_, _ handlers.DHCPv6, next func() error) error {
 	delay := time.Duration(m.Duration)
 	m.logger.Info("introducing delay in response", zap.Duration("delay", delay))
 	time.Sleep(delay)

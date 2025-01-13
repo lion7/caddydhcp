@@ -59,14 +59,14 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if !req.IsOptionRequested(dhcpv4.OptionBootfileName) {
 		return next()
 	}
 
 	var u *url.URL
 	mac := req.ClientHWAddr
-	archType := m.extractClientArchType(req.GetOneOption(dhcpv4.OptionClientSystemArchitectureType))
+	archTypes := req.ClientArch()
 	classId := req.ClassIdentifier()
 
 	// first try to find a URL matching the client MAC
@@ -77,10 +77,15 @@ func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() er
 		u = m.urls[classId]
 	}
 
-	if u == nil && archType != nil {
-		// lastly try to find a URL matching the client arch type
-		key := strconv.Itoa(int(*archType))
-		u = m.urls[key]
+	if u == nil && archTypes != nil {
+		// lastly try to find a URL matching the one of client arch types
+		for _, archType := range archTypes {
+			key := strconv.Itoa(int(archType))
+			u = m.urls[key]
+			if u != nil {
+				break
+			}
+		}
 	}
 
 	if u == nil {
@@ -88,16 +93,20 @@ func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() er
 			"no boot url found",
 			zap.Stringer("mac", mac),
 			zap.String("classId", classId),
-			zap.Stringer("arch", archType),
+			zap.Stringers("archTypes", archTypes),
 		)
 		return next()
+	}
+
+	if u.Host == "linkIp.local" {
+		u.Host = u.Hostname()
 	}
 
 	m.logger.Info(
 		"offering boot url",
 		zap.Stringer("mac", mac),
 		zap.String("classId", classId),
-		zap.Stringer("arch", archType),
+		zap.Stringers("archTypes", archTypes),
 		zap.Stringer("url", u),
 	)
 	switch u.Scheme {
@@ -111,77 +120,65 @@ func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() er
 	return next()
 }
 
-func (m *Module) Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	if !req.IsOptionRequested(dhcpv6.OptionBootfileURL) {
 		return next()
 	}
 
-	var (
-		u             *url.URL
-		vendorClass   *dhcpv6.OptVendorClass
-		duid, classId string
-		archType      *iana.Arch
-	)
-	{
-		opt := req.GetOneOption(dhcpv6.OptionClientID)
-		if opt != nil {
-			duid = hex.EncodeToString(opt.ToBytes())
-		}
-	}
-	{
-		opt := req.GetOneOption(dhcpv6.OptionVendorClass)
-		if opt != nil {
-			vendorClass = opt.(*dhcpv6.OptVendorClass)
-		}
-	}
-	{
-		if vendorClass != nil && len(vendorClass.Data) > 0 {
-			classId = string(vendorClass.Data[0])
-		}
-	}
-	{
-		opt := req.GetOneOption(dhcpv6.OptionClientArchType)
-		if opt != nil {
-			archType = m.extractClientArchType(opt.ToBytes())
-		}
-	}
+	var u *url.URL
+	clientId := req.Options.ClientID()
+	archTypes := req.Options.ArchTypes()
+	vendorClasses := req.Options.VendorClasses()
 
-	if duid != "" {
+	if clientId != nil {
 		// first try to find a URL matching the client ID
-		u = m.urls[duid]
+		encoded := hex.EncodeToString(clientId.ToBytes())
+		u = m.urls[encoded]
 	}
 
-	if u == nil && classId != "" {
-		// secondly try to find a URL matching the class id
-		u = m.urls[classId]
+	if u == nil && vendorClasses != nil {
+		// secondly try to find a URL matching one of the vendor classes
+		for _, class := range vendorClasses {
+			for _, classId := range class.Data {
+				u = m.urls[string(classId)]
+				if u != nil {
+					break
+				}
+			}
+		}
 	}
 
-	if u == nil && archType != nil {
-		// alternatively try to find a URL matching the client arch type
-		key := strconv.Itoa(int(*archType))
-		u = m.urls[key]
+	if u == nil && archTypes != nil {
+		// alternatively try to find a URL matching one of the client arch types
+		for _, archType := range archTypes {
+			key := strconv.Itoa(int(archType))
+			u = m.urls[key]
+			if u != nil {
+				break
+			}
+		}
 	}
 
 	if u == nil {
 		m.logger.Warn(
 			"no boot url found",
-			zap.String("duid", duid),
-			zap.String("classId", classId),
-			zap.Stringer("arch", archType),
+			zap.Stringer("duid", clientId),
+			zap.Stringers("vendorClasses", vendorClasses),
+			zap.Stringer("archTypes", archTypes),
 		)
 		return next()
 	}
 
 	m.logger.Info(
 		"offering boot url",
-		zap.String("duid", duid),
-		zap.String("classId", classId),
-		zap.Stringer("arch", archType),
+		zap.Stringer("clientId", clientId),
+		zap.Stringers("vendorClasses", vendorClasses),
+		zap.Stringer("archTypes", archTypes),
 		zap.Stringer("url", u),
 	)
-	if req.IsOptionRequested(dhcpv6.OptionVendorClass) && vendorClass != nil {
-		//resp.UpdateOption(vendorClass)
-	}
+	//if req.IsOptionRequested(dhcpv6.OptionVendorClass) && vendorClass != nil {
+	//resp.UpdateOption(vendorClass)
+	//}
 	resp.UpdateOption(dhcpv6.OptBootFileURL(u.String()))
 	if req.IsOptionRequested(dhcpv6.OptionBootfileParam) {
 		resp.UpdateOption(dhcpv6.OptBootFileParam(u.Query().Get("param")))
@@ -190,17 +187,13 @@ func (m *Module) Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() er
 	return next()
 }
 
-func (m *Module) extractClientArchType(opt []byte) *iana.Arch {
+func (m *Module) extractClientArchType(opt []byte) iana.Archs {
 	archTypes := iana.Archs{}
 	if err := archTypes.FromBytes(opt); err != nil {
 		m.logger.Warn("error parsing client system architecture type", zap.Error(err))
 		return nil
 	}
-	if len(archTypes) > 0 {
-		archType := archTypes[0]
-		return &archType
-	}
-	return nil
+	return archTypes
 }
 
 // Interfaces guards

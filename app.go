@@ -19,14 +19,17 @@ import (
 	"github.com/lion7/caddydhcp/handlers/dns"
 	"github.com/lion7/caddydhcp/handlers/example"
 	"github.com/lion7/caddydhcp/handlers/file"
+	"github.com/lion7/caddydhcp/handlers/filelog"
 	"github.com/lion7/caddydhcp/handlers/ipv6only"
 	"github.com/lion7/caddydhcp/handlers/leasetime"
 	"github.com/lion7/caddydhcp/handlers/mtu"
 	"github.com/lion7/caddydhcp/handlers/nbp"
 	"github.com/lion7/caddydhcp/handlers/netmask"
 	"github.com/lion7/caddydhcp/handlers/router"
+	"github.com/lion7/caddydhcp/handlers/searchdomains"
 	"github.com/lion7/caddydhcp/handlers/serverid"
 	"github.com/lion7/caddydhcp/handlers/sleep"
+	"github.com/lion7/caddydhcp/handlers/staticroute"
 )
 
 func init() {
@@ -36,6 +39,7 @@ func init() {
 	// register handler modules
 	caddy.RegisterModule(autoconfigure.Module{})
 	caddy.RegisterModule(dns.Module{})
+	caddy.RegisterModule(filelog.Module{})
 	caddy.RegisterModule(example.Module{})
 	caddy.RegisterModule(file.Module{})
 	caddy.RegisterModule(ipv6only.Module{})
@@ -44,8 +48,10 @@ func init() {
 	caddy.RegisterModule(nbp.Module{})
 	caddy.RegisterModule(netmask.Module{})
 	caddy.RegisterModule(router.Module{})
+	caddy.RegisterModule(searchdomains.Module{})
 	caddy.RegisterModule(serverid.Module{})
 	caddy.RegisterModule(sleep.Module{})
+	caddy.RegisterModule(staticroute.Module{})
 }
 
 type App struct {
@@ -260,7 +266,7 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv
 		return
 	}
 
-	err = s.handler.Handle4(req, resp, func() error { return nil })
+	err = s.handler.Handle4(handlers.DHCPv4{DHCPv4: req}, handlers.DHCPv4{DHCPv4: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
@@ -281,10 +287,9 @@ func (s *dhcpServer) Printf(format string, v ...interface{}) {
 
 func (s *dhcpServer) handle6(conn net.PacketConn, peer net.Addr, m dhcpv6.DHCPv6) {
 	var (
-		req  *dhcpv6.Message
-		resp dhcpv6.DHCPv6
-		err  error
-		n    int
+		req, resp *dhcpv6.Message
+		err       error
+		n         int
 	)
 
 	if s.accessLog != nil {
@@ -334,36 +339,29 @@ func (s *dhcpServer) handle6(conn net.PacketConn, peer net.Addr, m dhcpv6.DHCPv6
 		return
 	}
 
-	err = s.handler.Handle6(req, resp, func() error { return nil })
+	err = s.handler.Handle6(handlers.DHCPv6{Message: req}, handlers.DHCPv6{Message: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
 	}
 
-	// if the request was relayed, re-encapsulate the response
-	if m.IsRelay() {
-		if rmsg, ok := resp.(*dhcpv6.Message); !ok {
-			s.logger.Error("response is a relayed message, not re-encapsulating")
-		} else {
-			tmp, err := dhcpv6.NewRelayReplFromRelayForw(m.(*dhcpv6.RelayMessage), rmsg)
+	if resp != nil {
+		if m.IsRelay() {
+			// if the request was relayed, re-encapsulate the response
+			var encapsulated dhcpv6.DHCPv6
+			encapsulated, err = dhcpv6.NewRelayReplFromRelayForw(m.(*dhcpv6.RelayMessage), resp)
 			if err != nil {
 				s.logger.Error("cannot create relay-repl from relay-forw", zap.Error(err))
 				return
 			}
-			resp = tmp
-		}
-	}
-
-	if resp != nil {
-		n, err = conn.WriteTo(resp.ToBytes(), peer)
-		if err != nil {
-			s.logger.Error(err.Error())
-		}
-		if rmsg, err := resp.GetInnerMessage(); err != nil {
-			s.logger.Error("cannot get response inner message", zap.Error(err))
+			n, err = conn.WriteTo(encapsulated.ToBytes(), peer)
 		} else {
-			s.logger.Debug("send message", zap.String("message", rmsg.Summary()))
+			n, err = conn.WriteTo(resp.ToBytes(), peer)
 		}
+		if err != nil {
+			s.logger.Error("cannot write response", zap.Error(err))
+		}
+		s.logger.Debug("send message", zap.String("message", resp.Summary()))
 	}
 }
 
@@ -389,7 +387,7 @@ type handlerChain struct {
 	handlers []handlers.Handler
 }
 
-func (c handlerChain) Handle4(req, resp *dhcpv4.DHCPv4, next func() error) error {
+func (c handlerChain) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important
@@ -408,7 +406,7 @@ func (c handlerChain) Handle4(req, resp *dhcpv4.DHCPv4, next func() error) error
 	return next()
 }
 
-func (c handlerChain) Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() error) error {
+func (c handlerChain) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important

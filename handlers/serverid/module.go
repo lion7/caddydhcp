@@ -98,7 +98,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 }
 
 // Handle4 handles DHCPv4 packets for this plugin.
-func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if m.id == nil {
 		return next()
 	}
@@ -118,7 +118,7 @@ func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() er
 }
 
 // Handle6 handles DHCPv6 packets for this plugin.
-func (m *Module) Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	if m.duid == nil {
 		return next()
 	}

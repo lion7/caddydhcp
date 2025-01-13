@@ -16,7 +16,6 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/fsnotify/fsnotify"
-	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv6"
 	"github.com/lion7/caddydhcp/handlers"
 	"go.uber.org/zap"
@@ -66,7 +65,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	}
 }
 
-func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	m.logger.Debug("looking up an IP address for MAC", zap.String("mac", req.ClientHWAddr.String()))
 	ip, ok := m.lookup4(req.ClientHWAddr)
 	if !ok {
@@ -79,7 +78,7 @@ func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() er
 	return next()
 }
 
-func (m *Module) Handle6(req *dhcpv6.Message, resp dhcpv6.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	if req.Options.OneIANA() == nil {
 		m.logger.Debug("no address requested")
 		return next()

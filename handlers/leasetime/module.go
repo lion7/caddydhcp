@@ -9,7 +9,6 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/insomniacslk/dhcp/dhcpv6"
 	"github.com/lion7/caddydhcp/handlers"
 	"go.uber.org/zap"
 )
@@ -33,14 +32,14 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(req *dhcpv4.DHCPv4, resp *dhcpv4.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if req.OpCode != dhcpv4.OpcodeBootRequest && req.IsOptionRequested(dhcpv4.OptionIPAddressLeaseTime) {
 		resp.UpdateOption(dhcpv4.OptIPAddressLeaseTime(time.Duration(m.Time)))
 	}
 	return next()
 }
 
-func (m *Module) Handle6(_ *dhcpv6.Message, _ dhcpv6.DHCPv6, next func() error) error {
+func (m *Module) Handle6(_, _ handlers.DHCPv6, next func() error) error {
 	// lease time does not apply to DHCPv6, so just continue the chain
 	return next()
 }
