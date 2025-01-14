@@ -5,15 +5,14 @@
 package nbp
 
 import (
-	"context"
 	"encoding/hex"
-	"github.com/insomniacslk/dhcp/iana"
 	"net/url"
 	"strconv"
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv6"
+	"github.com/insomniacslk/dhcp/iana"
 	"github.com/lion7/caddydhcp/handlers"
 	"go.uber.org/zap"
 )
@@ -60,7 +59,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if !req.IsOptionRequested(dhcpv4.OptionBootfileName) {
 		return next()
 	}
@@ -102,7 +101,7 @@ func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func
 	return next()
 }
 
-func (m *Module) Handle6(_ context.Context, req, resp handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	if !req.IsOptionRequested(dhcpv6.OptionBootfileURL) {
 		return next()
 	}

@@ -1,7 +1,6 @@
 package caddydhcp
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -318,8 +317,7 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer *net.UDPAddr, m *dhcpv4.D
 		return
 	}
 
-	ctx := context.Background()
-	err = s.handler.Handle4(ctx, handlers.DHCPv4{DHCPv4: req}, handlers.DHCPv4{DHCPv4: resp}, func() error { return nil })
+	err = s.handler.Handle4(handlers.DHCPv4{DHCPv4: req}, handlers.DHCPv4{DHCPv4: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
@@ -382,8 +380,7 @@ func (s *dhcpServer) handle6(conn net.PacketConn, peer *net.UDPAddr, m dhcpv6.DH
 		return
 	}
 
-	ctx := context.Background()
-	err = s.handler.Handle6(ctx, handlers.DHCPv6{Message: req}, handlers.DHCPv6{Message: resp}, func() error { return nil })
+	err = s.handler.Handle6(handlers.DHCPv6{Message: req}, handlers.DHCPv6{Message: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
@@ -431,7 +428,7 @@ type handlerChain struct {
 	handlers []handlers.Handler
 }
 
-func (c handlerChain) Handle4(ctx context.Context, req, resp handlers.DHCPv4, next func() error) error {
+func (c handlerChain) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important
@@ -444,13 +441,13 @@ func (c handlerChain) Handle4(ctx context.Context, req, resp handlers.DHCPv4, ne
 		// but I just thought this made more sense
 		nextCopy := next
 		next = func() error {
-			return c.handlers[i].Handle4(ctx, req, resp, nextCopy)
+			return c.handlers[i].Handle4(req, resp, nextCopy)
 		}
 	}
 	return next()
 }
 
-func (c handlerChain) Handle6(ctx context.Context, req, resp handlers.DHCPv6, next func() error) error {
+func (c handlerChain) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important
@@ -462,7 +459,7 @@ func (c handlerChain) Handle6(ctx context.Context, req, resp handlers.DHCPv6, ne
 		// this closure and into a standalone package-level func,
 		// but I just thought this made more sense
 		nextCopy := next
-		next = func() error { return c.handlers[i].Handle6(ctx, req, resp, nextCopy) }
+		next = func() error { return c.handlers[i].Handle6(req, resp, nextCopy) }
 	}
 	return next()
 }

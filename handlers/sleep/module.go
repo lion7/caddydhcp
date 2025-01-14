@@ -5,7 +5,6 @@
 package sleep
 
 import (
-	"context"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -33,14 +32,14 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(_ context.Context, _, _ handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	delay := time.Duration(m.Duration)
 	m.logger.Info("introducing delay in response", zap.Duration("delay", delay))
 	time.Sleep(delay)
 	return next()
 }
 
-func (m *Module) Handle6(_ context.Context, _, _ handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	delay := time.Duration(m.Duration)
 	m.logger.Info("introducing delay in response", zap.Duration("delay", delay))
 	time.Sleep(delay)

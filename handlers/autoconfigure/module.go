@@ -5,8 +5,6 @@
 package autoconfigure
 
 import (
-	"context"
-
 	"github.com/caddyserver/caddy/v2"
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/lion7/caddydhcp/handlers"
@@ -52,7 +50,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if resp.MessageType() != dhcpv4.MessageTypeOffer || !resp.YourIPAddr.IsUnspecified() {
 		return next()
 	}
@@ -78,7 +76,7 @@ func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func
 	return nil
 }
 
-func (m *Module) Handle6(_ context.Context, _, _ handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	// autoconfigure does not apply to DHCPv6, so just continue the chain
 	return next()
 }

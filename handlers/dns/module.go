@@ -5,7 +5,6 @@
 package dns
 
 import (
-	"context"
 	"net"
 
 	"github.com/caddyserver/caddy/v2"
@@ -50,7 +49,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 }
 
 // Handle4 handles DHCPv4 packets for this plugin.
-func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	if req.IsOptionRequested(dhcpv4.OptionDomainNameServer) {
 		resp.UpdateOption(dhcpv4.OptDNS(m.servers4...))
 	}
@@ -58,7 +57,7 @@ func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func
 }
 
 // Handle6 handles DHCPv6 packets for this plugin.
-func (m *Module) Handle6(_ context.Context, req, resp handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	if req.IsOptionRequested(dhcpv6.OptionDNSRecursiveNameServer) {
 		resp.UpdateOption(dhcpv6.OptDNS(m.servers6...))
 	}

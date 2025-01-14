@@ -5,7 +5,6 @@
 package example
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/caddyserver/caddy/v2"
@@ -44,7 +43,7 @@ func (m *Module) Provision(ctx caddy.Context) error {
 }
 
 // Handle4 behaves like Handle6, but for DHCPv4 packets.
-func (m *Module) Handle4(_ context.Context, req, _ handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	m.logger.Info(fmt.Sprintf("%s: received DHCPv4 packet", m.Prefix), zap.String("summary", req.Summary()))
 	return next()
 }
@@ -56,7 +55,7 @@ func (m *Module) Handle4(_ context.Context, req, _ handlers.DHCPv4, next func() 
 // Handlers which act as middleware should call the next function to propagate the request down the chain properly.
 // Handlers which act as responders (content origins) need not invoke the next function,
 // since the last handler in the chain should be the first to write the response.
-func (m *Module) Handle6(_ context.Context, req, _ handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 	m.logger.Info(fmt.Sprintf("%s: received DHCPv6 packet", m.Prefix), zap.String("summary", req.Summary()))
 	return next()
 }
