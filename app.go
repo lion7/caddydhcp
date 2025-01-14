@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -11,6 +12,7 @@ import (
 	"github.com/insomniacslk/dhcp/dhcpv6"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sys/unix"
 
 	"github.com/lion7/caddydhcp/handlers"
 	"github.com/lion7/caddydhcp/handlers/autoconfigure"
@@ -19,6 +21,7 @@ import (
 	"github.com/lion7/caddydhcp/handlers/file"
 	"github.com/lion7/caddydhcp/handlers/ipv6only"
 	"github.com/lion7/caddydhcp/handlers/leasetime"
+	"github.com/lion7/caddydhcp/handlers/messagelog"
 	"github.com/lion7/caddydhcp/handlers/mtu"
 	"github.com/lion7/caddydhcp/handlers/nbp"
 	"github.com/lion7/caddydhcp/handlers/netmask"
@@ -40,6 +43,7 @@ func init() {
 	caddy.RegisterModule(file.Module{})
 	caddy.RegisterModule(ipv6only.Module{})
 	caddy.RegisterModule(leasetime.Module{})
+	caddy.RegisterModule(messagelog.Module{})
 	caddy.RegisterModule(mtu.Module{})
 	caddy.RegisterModule(nbp.Module{})
 	caddy.RegisterModule(netmask.Module{})
@@ -58,10 +62,14 @@ type App struct {
 }
 
 type Server struct {
+	// Network interface to which to bind listeners.
+	// By default, all interfaces are bound.
+	Interface string `json:"interface,omitempty"`
+
 	// Socket addresses to which to bind listeners.
 	// Accepts network addresses that may include ports.
 	// Listener addresses must be unique; they cannot be repeated across all defined servers.
-	// The default addresses are `udp4/:69`, `udp6/:547`, 'udp6/[ff02::1:2]:547' and 'udp6/[ff05::1:3]:547'.
+	// The default addresses are `udp4/:69`, `udp6/:547`, `udp6/[ff02::1:2]:547` and `udp6/[ff05::1:3]:547`.
 	Listen []string `json:"listen,omitempty"`
 
 	// Enables access logging.
@@ -84,6 +92,7 @@ type Server struct {
 
 type dhcpServer struct {
 	name      string
+	iface     string
 	addresses []caddy.NetworkAddress
 	handler   handlers.Handler
 	ctx       caddy.Context
@@ -149,6 +158,7 @@ func (app *App) Provision(ctx caddy.Context) error {
 		}
 		s := &dhcpServer{
 			name:      name,
+			iface:     srv.Interface,
 			addresses: addresses,
 			handler:   handler,
 			ctx:       ctx,
@@ -168,43 +178,35 @@ func (app *App) Start() error {
 		s.logger.Info(
 			"starting server loop",
 			zap.String("name", s.name),
+			zap.String("interface", s.iface),
 			zap.Stringers("addresses", s.addresses),
 		)
 		for _, addr := range s.addresses {
-			ln, err := addr.Listen(s.ctx, 0, net.ListenConfig{})
+			ln, err := addr.Listen(s.ctx, 0, net.ListenConfig{
+				Control: func(network, address string, c syscall.RawConn) error {
+					if s.iface != "" {
+						var bindErr error
+						controlErr := c.Control(func(fd uintptr) {
+							bindErr = unix.BindToDevice(int(fd), s.iface)
+						})
+						if controlErr != nil {
+							return controlErr
+						}
+						if bindErr != nil {
+							return bindErr
+						}
+					}
+					return nil
+				},
+			})
 			if err != nil {
 				return fmt.Errorf("failed to listen on %s: %v", addr, err)
 			}
 			conn := ln.(net.PacketConn)
 			s.connections = append(s.connections, conn)
-			if addr.Network == "udp6" {
-				app.errGroup.Go(func() error {
-					defer conn.Close()
-					for {
-						rbuf := make([]byte, 4096) // FIXME this is bad
-						n, peer, err := conn.ReadFrom(rbuf)
-						if err != nil {
-							s.logger.Error("error reading from packet conn", zap.Error(err))
-							return err
-						}
-						s.logger.Info("handling request", zap.Stringer("peer", peer))
 
-						m, err := dhcpv6.FromBytes(rbuf[:n])
-						if err != nil {
-							s.logger.Error("error parsing DHCPv6 request", zap.Error(err))
-							continue
-						}
-
-						upeer, ok := peer.(*net.UDPAddr)
-						if !ok {
-							s.logger.Warn("not a UDP connection?", zap.Stringer("peer", peer))
-							continue
-						}
-
-						go s.handle6(conn, upeer, m)
-					}
-				})
-			} else if addr.Network == "udp4" {
+			switch {
+			case addr.Network == "udp4":
 				app.errGroup.Go(func() error {
 					defer conn.Close()
 					for {
@@ -239,6 +241,33 @@ func (app *App) Start() error {
 						go s.handle4(conn, upeer, m)
 					}
 				})
+			case addr.Network == "udp6":
+				app.errGroup.Go(func() error {
+					defer conn.Close()
+					for {
+						rbuf := make([]byte, 4096) // FIXME this is bad
+						n, peer, err := conn.ReadFrom(rbuf)
+						if err != nil {
+							s.logger.Error("error reading from packet conn", zap.Error(err))
+							return err
+						}
+						s.logger.Info("handling request", zap.Stringer("peer", peer))
+
+						m, err := dhcpv6.FromBytes(rbuf[:n])
+						if err != nil {
+							s.logger.Error("error parsing DHCPv6 request", zap.Error(err))
+							continue
+						}
+
+						upeer, ok := peer.(*net.UDPAddr)
+						if !ok {
+							s.logger.Warn("not a UDP connection?", zap.Stringer("peer", peer))
+							continue
+						}
+
+						go s.handle6(conn, upeer, m)
+					}
+				})
 			}
 		}
 	}
@@ -251,6 +280,7 @@ func (app *App) Stop() error {
 		s.logger.Info(
 			"server shutting down with eternal grace period",
 			zap.String("name", s.name),
+			zap.String("interface", s.iface),
 			zap.Stringers("addresses", s.addresses),
 		)
 		for _, conn := range s.connections {

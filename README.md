@@ -27,12 +27,7 @@ Create a Caddy JSON configuration, in this example saved as `caddy.json`:
       "servers": {
         "srv0": {
           "logs": true,
-          "interfaces": [
-            "lo"
-          ],
-          "addresses": [
-            "0.0.0.0:69"
-          ],
+          "interface": "lo",
           "handle": [
             {
               "handler": "file",
@@ -47,21 +42,7 @@ Create a Caddy JSON configuration, in this example saved as `caddy.json`:
 }
 ```
 
-Note that by default this module will listen on `0.0.0.0:69` and `[::]:547`.
-A minimal configuration:
-
-```json
-{
-  "apps": {
-    "dhcp": {
-      "servers": {
-        "srv0": {
-        }
-      }
-    }
-  }
-}
-```
+Note that by default this module will listen on `udp4/:69`, `udp6/:547`, `udp6/[ff02::1:2]:547` and `udp6/[ff05::1:3]:547`.
 
 ## Running
 
