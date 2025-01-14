@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"context"
+
 	"github.com/caddyserver/caddy/v2"
 	"github.com/insomniacslk/dhcp/dhcpv4"
 	"github.com/insomniacslk/dhcp/dhcpv6"
@@ -26,8 +28,8 @@ type DHCPv6 struct {
 // by returning it unchanged. Returned errors should not be re-wrapped
 // if they are already HandlerError values.
 type Handler interface {
-	Handle4(req, resp DHCPv4, next func() error) error
-	Handle6(req, resp DHCPv6, next func() error) error
+	Handle4(ctx context.Context, req, resp DHCPv4, next func() error) error
+	Handle6(ctx context.Context, req, resp DHCPv6, next func() error) error
 }
 
 // A HandlerModule is a Handler that also implements

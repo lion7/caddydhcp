@@ -5,6 +5,7 @@
 package ipv6only
 
 import (
+	"context"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -42,14 +43,14 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func() error) error {
 	if req.IsOptionRequested(dhcpv4.OptionIPv6OnlyPreferred) {
 		resp.UpdateOption(dhcpv4.OptIPv6OnlyPreferred(time.Duration(m.Wait)))
 	}
 	return next()
 }
 
-func (m *Module) Handle6(_, _ handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(_ context.Context, _, _ handlers.DHCPv6, next func() error) error {
 	// ipv6-only does not apply to DHCPv6, so just continue the chain
 	return next()
 }

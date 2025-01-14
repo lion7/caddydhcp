@@ -6,6 +6,7 @@ package file
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net"
@@ -54,6 +55,7 @@ type Module struct {
 }
 
 func (m *Module) Provision(ctx caddy.Context) error {
+	ctx.Slogger()
 	m.logger = ctx.Logger()
 	m.recLock = &sync.RWMutex{}
 	// when auto refresh is enabled, watch the lease file for
@@ -65,7 +67,8 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	}
 }
 
-func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(_ context.Context, req, resp handlers.DHCPv4, next func() error) error {
+
 	m.logger.Debug("looking up an IP address for MAC", zap.String("mac", req.ClientHWAddr.String()))
 	ip, ok := m.lookup4(req.ClientHWAddr)
 	if !ok {
@@ -78,7 +81,7 @@ func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 	return next()
 }
 
-func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(_ context.Context, req, resp handlers.DHCPv6, next func() error) error {
 	if req.Options.OneIANA() == nil {
 		m.logger.Debug("no address requested")
 		return next()

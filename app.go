@@ -1,6 +1,7 @@
 package caddydhcp
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -8,9 +9,7 @@ import (
 
 	"github.com/caddyserver/caddy/v2"
 	"github.com/insomniacslk/dhcp/dhcpv4"
-	"github.com/insomniacslk/dhcp/dhcpv4/server4"
 	"github.com/insomniacslk/dhcp/dhcpv6"
-	"github.com/insomniacslk/dhcp/dhcpv6/server6"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 
@@ -19,7 +18,6 @@ import (
 	"github.com/lion7/caddydhcp/handlers/dns"
 	"github.com/lion7/caddydhcp/handlers/example"
 	"github.com/lion7/caddydhcp/handlers/file"
-	"github.com/lion7/caddydhcp/handlers/filelog"
 	"github.com/lion7/caddydhcp/handlers/ipv6only"
 	"github.com/lion7/caddydhcp/handlers/leasetime"
 	"github.com/lion7/caddydhcp/handlers/mtu"
@@ -39,7 +37,6 @@ func init() {
 	// register handler modules
 	caddy.RegisterModule(autoconfigure.Module{})
 	caddy.RegisterModule(dns.Module{})
-	caddy.RegisterModule(filelog.Module{})
 	caddy.RegisterModule(example.Module{})
 	caddy.RegisterModule(file.Module{})
 	caddy.RegisterModule(ipv6only.Module{})
@@ -58,7 +55,6 @@ type App struct {
 	Servers map[string]*Server `json:"servers,omitempty"`
 
 	servers  []*dhcpServer
-	ctx      caddy.Context
 	errGroup *errgroup.Group
 }
 
@@ -94,13 +90,13 @@ type Server struct {
 type dhcpServer struct {
 	name       string
 	interfaces []string
-	addresses  []*net.UDPAddr
+	addresses  []caddy.NetworkAddress
 	handler    handlers.Handler
+	ctx        caddy.Context
 	logger     *zap.Logger
 	accessLog  *zap.Logger
 
-	servers4 []*server4.Server
-	servers6 []*server6.Server
+	connections []net.PacketConn
 }
 
 // CaddyModule returns the Caddy module information.
@@ -112,19 +108,44 @@ func (App) CaddyModule() caddy.ModuleInfo {
 }
 
 func (app *App) Provision(ctx caddy.Context) error {
-	app.ctx = ctx
 	for name, srv := range app.Servers {
 		interfaces := srv.Interfaces
 		if len(interfaces) == 0 {
 			interfaces = []string{""}
 		}
 
-		addresses, err := parseAddresses(srv.Addresses)
-		if err != nil {
-			return err
-		} else if len(addresses) == 0 {
-			addresses = append(addresses, &net.UDPAddr{IP: net.IPv4zero, Port: dhcpv4.ServerPort})
-			addresses = append(addresses, &net.UDPAddr{IP: net.IPv6unspecified, Port: dhcpv6.DefaultServerPort})
+		var addresses []caddy.NetworkAddress
+		for _, address := range srv.Addresses {
+			addr, err := caddy.ParseNetworkAddress(address)
+			if err != nil {
+				return err
+			}
+			// todo: set port based on IP family
+			addresses = append(addresses, addr)
+		}
+		if len(addresses) == 0 {
+			addresses = append(addresses, caddy.NetworkAddress{
+				Network:   "udp4",
+				StartPort: dhcpv4.ServerPort,
+				EndPort:   dhcpv4.ServerPort,
+			})
+			addresses = append(addresses, caddy.NetworkAddress{
+				Network:   "udp6",
+				StartPort: dhcpv6.DefaultServerPort,
+				EndPort:   dhcpv6.DefaultServerPort,
+			})
+			addresses = append(addresses, caddy.NetworkAddress{
+				Network:   "udp6",
+				Host:      dhcpv6.AllDHCPRelayAgentsAndServers.String(),
+				StartPort: dhcpv6.DefaultServerPort,
+				EndPort:   dhcpv6.DefaultServerPort,
+			})
+			addresses = append(addresses, caddy.NetworkAddress{
+				Network:   "udp6",
+				Host:      dhcpv6.AllDHCPServers.String(),
+				StartPort: dhcpv6.DefaultServerPort,
+				EndPort:   dhcpv6.DefaultServerPort,
+			})
 		}
 
 		handler, err := compileHandlerChain(ctx, srv)
@@ -133,13 +154,18 @@ func (app *App) Provision(ctx caddy.Context) error {
 		}
 
 		logger := ctx.Logger().Named(name)
+		var accessLog *zap.Logger
+		if srv.Logs {
+			accessLog = logger.Named("access")
+		}
 		s := &dhcpServer{
 			name:       name,
 			interfaces: interfaces,
 			addresses:  addresses,
 			handler:    handler,
+			ctx:        ctx,
 			logger:     logger,
-			accessLog:  logger.Named("access"),
+			accessLog:  accessLog,
 		}
 
 		app.servers = append(app.servers, s)
@@ -151,47 +177,83 @@ func (app *App) Provision(ctx caddy.Context) error {
 func (app *App) Start() error {
 	app.errGroup = &errgroup.Group{}
 	for _, s := range app.servers {
-		for _, iface := range s.interfaces {
-			for _, addr := range s.addresses {
-				isIPv6 := addr.IP.To4() == nil
-				if isIPv6 {
-					server, err := server6.NewServer(
-						iface,
-						addr,
-						s.handle6,
-						server6.WithLogger(server6.ShortSummaryLogger{Printfer: s}),
-					)
-					if err != nil {
-						return fmt.Errorf("failed to listen on %s: %v", addr, err)
-					}
-					app.errGroup.Go(func() error {
-						return server.Serve()
-					})
-					s.servers6 = append(s.servers6, server)
-				} else {
-					server, err := server4.NewServer(
-						iface,
-						addr,
-						s.handle4,
-						server4.WithLogger(server4.ShortSummaryLogger{Printfer: s}),
-					)
-					if err != nil {
-						return fmt.Errorf("failed to listen on %s: %v", addr, err)
-					}
-					app.errGroup.Go(func() error {
-						return server.Serve()
-					})
-					s.servers4 = append(s.servers4, server)
-				}
-			}
-		}
-
 		s.logger.Info(
-			"server running",
+			"starting server loop",
 			zap.String("name", s.name),
 			zap.Strings("interfaces", s.interfaces),
 			zap.Stringers("addresses", s.addresses),
 		)
+		for _, addr := range s.addresses {
+			ln, err := addr.Listen(s.ctx, 0, net.ListenConfig{})
+			if err != nil {
+				return fmt.Errorf("failed to listen on %s: %v", addr, err)
+			}
+			conn := ln.(net.PacketConn)
+			s.connections = append(s.connections, conn)
+			if addr.Network == "udp6" {
+				app.errGroup.Go(func() error {
+					defer conn.Close()
+					for {
+						rbuf := make([]byte, 4096) // FIXME this is bad
+						n, peer, err := conn.ReadFrom(rbuf)
+						if err != nil {
+							s.logger.Error("error reading from packet conn", zap.Error(err))
+							return err
+						}
+						s.logger.Info("handling request", zap.Stringer("peer", peer))
+
+						m, err := dhcpv6.FromBytes(rbuf[:n])
+						if err != nil {
+							s.logger.Error("error parsing DHCPv6 request", zap.Error(err))
+							continue
+						}
+
+						upeer, ok := peer.(*net.UDPAddr)
+						if !ok {
+							s.logger.Warn("not a UDP connection?", zap.Stringer("peer", peer))
+							continue
+						}
+
+						go s.handle6(conn, upeer, m)
+					}
+				})
+			} else if addr.Network == "udp4" {
+				app.errGroup.Go(func() error {
+					defer conn.Close()
+					for {
+						rbuf := make([]byte, 4096) // FIXME this is bad
+						n, peer, err := conn.ReadFrom(rbuf)
+						if err != nil {
+							s.logger.Error("error reading from packet conn", zap.Error(err))
+							return err
+						}
+						s.logger.Info("handling request", zap.Stringer("peer", peer))
+
+						m, err := dhcpv4.FromBytes(rbuf[:n])
+						if err != nil {
+							s.logger.Error("error parsing DHCPv4 request", zap.Error(err))
+							continue
+						}
+
+						upeer, ok := peer.(*net.UDPAddr)
+						if !ok {
+							s.logger.Warn("not a UDP connection?", zap.Stringer("peer", peer))
+							continue
+						}
+
+						// Set peer to broadcast if the client did not have an IP.
+						if upeer.IP == nil || upeer.IP.To4().Equal(net.IPv4zero) {
+							upeer = &net.UDPAddr{
+								IP:   net.IPv4bcast,
+								Port: upeer.Port,
+							}
+						}
+
+						go s.handle4(conn, upeer, m)
+					}
+				})
+			}
+		}
 	}
 	return nil
 }
@@ -199,27 +261,23 @@ func (app *App) Start() error {
 // Stop stops the app.
 func (app *App) Stop() error {
 	for _, s := range app.servers {
-		for _, server := range s.servers4 {
-			if err := server.Close(); err != nil {
-				return err
-			}
-		}
-		for _, server := range s.servers6 {
-			if err := server.Close(); err != nil {
-				return err
-			}
-		}
 		s.logger.Info(
-			"server stopped",
+			"server shutting down with eternal grace period",
 			zap.String("name", s.name),
 			zap.Strings("interfaces", s.interfaces),
 			zap.Stringers("addresses", s.addresses),
 		)
+		for _, conn := range s.connections {
+			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				return err
+			}
+		}
 	}
 	return app.errGroup.Wait()
 }
 
-func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv4) {
+func (s *dhcpServer) handle4(conn net.PacketConn, peer *net.UDPAddr, m *dhcpv4.DHCPv4) {
 	var (
 		req, resp *dhcpv4.DHCPv4
 		err       error
@@ -227,20 +285,14 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv
 	)
 
 	if s.accessLog != nil {
-		var remoteIP net.IP
-		var remotePort int
-		if udpAddr, ok := peer.(*net.UDPAddr); ok {
-			remoteIP = udpAddr.IP
-			remotePort = udpAddr.Port
-		}
 		start := time.Now()
 		defer func() {
 			end := time.Now()
 			d := end.Sub(start)
 			s.accessLog.Info(
 				"handled request",
-				zap.String("remote_ip", remoteIP.String()),
-				zap.Int("remote_port", remotePort),
+				zap.String("remote_ip", peer.IP.String()),
+				zap.Int("remote_port", peer.Port),
 				zap.String("message_type", m.MessageType().String()),
 				zap.Int("bytes_written", n),
 				zap.String("duration", d.String()),
@@ -253,7 +305,7 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv
 
 	resp, err = dhcpv4.NewReplyFromRequest(req)
 	if err != nil {
-		s.Printf("handle4: failed to build reply: %v", err)
+		s.logger.Error("failed to build reply", zap.Error(err))
 		return
 	}
 	switch mt := req.MessageType(); mt {
@@ -262,11 +314,12 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv
 	case dhcpv4.MessageTypeRequest:
 		resp.UpdateOption(dhcpv4.OptMessageType(dhcpv4.MessageTypeAck))
 	default:
-		s.Printf("handle4: unhandled message type: %v", mt)
+		s.logger.Error("unhandled message type", zap.Stringer("messageType", mt))
 		return
 	}
 
-	err = s.handler.Handle4(handlers.DHCPv4{DHCPv4: req}, handlers.DHCPv4{DHCPv4: resp}, func() error { return nil })
+	ctx := context.Background()
+	err = s.handler.Handle4(ctx, handlers.DHCPv4{DHCPv4: req}, handlers.DHCPv4{DHCPv4: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
@@ -281,11 +334,7 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer net.Addr, m *dhcpv4.DHCPv
 	}
 }
 
-func (s *dhcpServer) Printf(format string, v ...interface{}) {
-	s.logger.Debug(fmt.Sprintf(format, v...))
-}
-
-func (s *dhcpServer) handle6(conn net.PacketConn, peer net.Addr, m dhcpv6.DHCPv6) {
+func (s *dhcpServer) handle6(conn net.PacketConn, peer *net.UDPAddr, m dhcpv6.DHCPv6) {
 	var (
 		req, resp *dhcpv6.Message
 		err       error
@@ -293,20 +342,14 @@ func (s *dhcpServer) handle6(conn net.PacketConn, peer net.Addr, m dhcpv6.DHCPv6
 	)
 
 	if s.accessLog != nil {
-		var remoteIP net.IP
-		var remotePort int
-		if udpAddr, ok := peer.(*net.UDPAddr); ok {
-			remoteIP = udpAddr.IP
-			remotePort = udpAddr.Port
-		}
 		start := time.Now()
 		defer func() {
 			end := time.Now()
 			d := end.Sub(start)
 			s.accessLog.Info(
 				"handled request",
-				zap.String("remote_ip", remoteIP.String()),
-				zap.Int("remote_port", remotePort),
+				zap.String("remote_ip", peer.IP.String()),
+				zap.Int("remote_port", peer.Port),
 				zap.String("message_type", m.Type().String()),
 				zap.Int("bytes_written", n),
 				zap.String("duration", d.String()),
@@ -339,7 +382,8 @@ func (s *dhcpServer) handle6(conn net.PacketConn, peer net.Addr, m dhcpv6.DHCPv6
 		return
 	}
 
-	err = s.handler.Handle6(handlers.DHCPv6{Message: req}, handlers.DHCPv6{Message: resp}, func() error { return nil })
+	ctx := context.Background()
+	err = s.handler.Handle6(ctx, handlers.DHCPv6{Message: req}, handlers.DHCPv6{Message: resp}, func() error { return nil })
 	if err != nil {
 		s.logger.Error("handler chain failed", zap.Error(err))
 		return
@@ -387,7 +431,7 @@ type handlerChain struct {
 	handlers []handlers.Handler
 }
 
-func (c handlerChain) Handle4(req, resp handlers.DHCPv4, next func() error) error {
+func (c handlerChain) Handle4(ctx context.Context, req, resp handlers.DHCPv4, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important
@@ -400,13 +444,13 @@ func (c handlerChain) Handle4(req, resp handlers.DHCPv4, next func() error) erro
 		// but I just thought this made more sense
 		nextCopy := next
 		next = func() error {
-			return c.handlers[i].Handle4(req, resp, nextCopy)
+			return c.handlers[i].Handle4(ctx, req, resp, nextCopy)
 		}
 	}
 	return next()
 }
 
-func (c handlerChain) Handle6(req, resp handlers.DHCPv6, next func() error) error {
+func (c handlerChain) Handle6(ctx context.Context, req, resp handlers.DHCPv6, next func() error) error {
 	for i := len(c.handlers) - 1; i >= 0; i-- {
 		// copy the next handler (it's an interface, so it's just
 		// a very lightweight copy of a pointer); this is important
@@ -418,54 +462,15 @@ func (c handlerChain) Handle6(req, resp handlers.DHCPv6, next func() error) erro
 		// this closure and into a standalone package-level func,
 		// but I just thought this made more sense
 		nextCopy := next
-		next = func() error { return c.handlers[i].Handle6(req, resp, nextCopy) }
+		next = func() error { return c.handlers[i].Handle6(ctx, req, resp, nextCopy) }
 	}
 	return next()
-}
-
-func parseAddresses(addresses []string) ([]*net.UDPAddr, error) {
-	var result []*net.UDPAddr
-	for _, address := range addresses {
-		var (
-			addr *net.UDPAddr
-			err  error
-		)
-		if ip := net.ParseIP(address); ip != nil {
-			// if it's just an IP address, assign the port based on the IP address family
-			isIPv6 := ip.To4() == nil
-			var port int
-			if isIPv6 {
-				port = dhcpv6.DefaultServerPort
-			} else {
-				port = dhcpv4.ServerPort
-			}
-			addr = &net.UDPAddr{
-				IP:   ip,
-				Port: port,
-			}
-		} else {
-			// parse the entire address
-			addr, err = net.ResolveUDPAddr("udp", address)
-			if err != nil {
-				return nil, err
-			}
-			if addr.IP == nil {
-				// demand that an IP address is specified so we can differentiate between IPv4 and IPv6
-				return nil, fmt.Errorf("only port specified, please also specify an IP address: %s", address)
-			}
-		}
-		result = append(result, addr)
-	}
-	return result, nil
 }
 
 // Interfaces guards
 var (
 	_ caddy.App         = (*App)(nil)
 	_ caddy.Provisioner = (*App)(nil)
-
-	_ server4.Printfer = (*dhcpServer)(nil)
-	_ server6.Printfer = (*dhcpServer)(nil)
 
 	_ handlers.Handler = (*handlerChain)(nil)
 )

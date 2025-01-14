@@ -5,6 +5,7 @@
 package netmask
 
 import (
+	"context"
 	"encoding/binary"
 	"fmt"
 	"net"
@@ -48,12 +49,12 @@ func (m *Module) Provision(ctx caddy.Context) error {
 	return nil
 }
 
-func (m *Module) Handle4(_, resp handlers.DHCPv4, next func() error) error {
+func (m *Module) Handle4(_ context.Context, _, resp handlers.DHCPv4, next func() error) error {
 	resp.UpdateOption(dhcpv4.OptSubnetMask(m.netmask))
 	return next()
 }
 
-func (m *Module) Handle6(_, _ handlers.DHCPv6, next func() error) error {
+func (m *Module) Handle6(_ context.Context, _, _ handlers.DHCPv6, next func() error) error {
 	// netmask does not apply to DHCPv6, so just continue the chain
 	return next()
 }
