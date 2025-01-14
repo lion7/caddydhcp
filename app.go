@@ -58,15 +58,11 @@ type App struct {
 }
 
 type Server struct {
-	// Network interfaces to which to bind listeners.
-	// By default, all interfaces are bound.
-	Interfaces []string `json:"interfaces,omitempty"`
-
 	// Socket addresses to which to bind listeners.
 	// Accepts network addresses that may include ports.
 	// Listener addresses must be unique; they cannot be repeated across all defined servers.
-	// The default addresses are `0.0.0.0:69` and `[::]:547`.
-	Addresses []string `json:"addresses,omitempty"`
+	// The default addresses are `udp4/:69`, `udp6/:547`, 'udp6/[ff02::1:2]:547' and 'udp6/[ff05::1:3]:547'.
+	Listen []string `json:"listen,omitempty"`
 
 	// Enables access logging.
 	Logs bool `json:"logs,omitempty"`
@@ -87,13 +83,12 @@ type Server struct {
 }
 
 type dhcpServer struct {
-	name       string
-	interfaces []string
-	addresses  []caddy.NetworkAddress
-	handler    handlers.Handler
-	ctx        caddy.Context
-	logger     *zap.Logger
-	accessLog  *zap.Logger
+	name      string
+	addresses []caddy.NetworkAddress
+	handler   handlers.Handler
+	ctx       caddy.Context
+	logger    *zap.Logger
+	accessLog *zap.Logger
 
 	connections []net.PacketConn
 }
@@ -108,13 +103,8 @@ func (App) CaddyModule() caddy.ModuleInfo {
 
 func (app *App) Provision(ctx caddy.Context) error {
 	for name, srv := range app.Servers {
-		interfaces := srv.Interfaces
-		if len(interfaces) == 0 {
-			interfaces = []string{""}
-		}
-
 		var addresses []caddy.NetworkAddress
-		for _, address := range srv.Addresses {
+		for _, address := range srv.Listen {
 			addr, err := caddy.ParseNetworkAddress(address)
 			if err != nil {
 				return err
@@ -158,13 +148,12 @@ func (app *App) Provision(ctx caddy.Context) error {
 			accessLog = logger.Named("access")
 		}
 		s := &dhcpServer{
-			name:       name,
-			interfaces: interfaces,
-			addresses:  addresses,
-			handler:    handler,
-			ctx:        ctx,
-			logger:     logger,
-			accessLog:  accessLog,
+			name:      name,
+			addresses: addresses,
+			handler:   handler,
+			ctx:       ctx,
+			logger:    logger,
+			accessLog: accessLog,
 		}
 
 		app.servers = append(app.servers, s)
@@ -179,7 +168,6 @@ func (app *App) Start() error {
 		s.logger.Info(
 			"starting server loop",
 			zap.String("name", s.name),
-			zap.Strings("interfaces", s.interfaces),
 			zap.Stringers("addresses", s.addresses),
 		)
 		for _, addr := range s.addresses {
@@ -263,14 +251,10 @@ func (app *App) Stop() error {
 		s.logger.Info(
 			"server shutting down with eternal grace period",
 			zap.String("name", s.name),
-			zap.Strings("interfaces", s.interfaces),
 			zap.Stringers("addresses", s.addresses),
 		)
 		for _, conn := range s.connections {
 			_ = conn.Close()
-			if err := conn.Close(); err != nil {
-				return err
-			}
 		}
 	}
 	return app.errGroup.Wait()
