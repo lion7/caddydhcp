@@ -3,6 +3,7 @@ package caddydhcp
 import (
 	"encoding/json"
 	"fmt"
+	rangeplugin "github.com/lion7/caddydhcp/handlers/range"
 	"net"
 	"syscall"
 	"time"
@@ -47,6 +48,7 @@ func init() {
 	caddy.RegisterModule(mtu.Module{})
 	caddy.RegisterModule(nbp.Module{})
 	caddy.RegisterModule(netmask.Module{})
+	caddy.RegisterModule(rangeplugin.Module{})
 	caddy.RegisterModule(router.Module{})
 	caddy.RegisterModule(searchdomains.Module{})
 	caddy.RegisterModule(serverid.Module{})
@@ -304,11 +306,11 @@ func (s *dhcpServer) handle4(conn net.PacketConn, peer *net.UDPAddr, m *dhcpv4.D
 			d := end.Sub(start)
 			s.accessLog.Info(
 				"handled request",
-				zap.String("remote_ip", peer.IP.String()),
+				zap.Stringer("remote_ip", peer.IP),
 				zap.Int("remote_port", peer.Port),
-				zap.String("message_type", m.MessageType().String()),
+				zap.Stringer("message_type", m.MessageType()),
 				zap.Int("bytes_written", n),
-				zap.String("duration", d.String()),
+				zap.Stringer("duration", d),
 			)
 		}()
 	}
@@ -360,11 +362,11 @@ func (s *dhcpServer) handle6(conn net.PacketConn, peer *net.UDPAddr, m dhcpv6.DH
 			d := end.Sub(start)
 			s.accessLog.Info(
 				"handled request",
-				zap.String("remote_ip", peer.IP.String()),
+				zap.Stringer("remote_ip", peer.IP),
 				zap.Int("remote_port", peer.Port),
-				zap.String("message_type", m.Type().String()),
+				zap.Stringer("message_type", m.Type()),
 				zap.Int("bytes_written", n),
-				zap.String("duration", d.String()),
+				zap.Stringer("duration", d),
 			)
 		}()
 	}

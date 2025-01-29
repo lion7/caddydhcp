@@ -60,15 +60,15 @@ func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 		resp.UpdateOption(dhcpv4.OptAutoConfigure(m.autoConfigure))
 		m.logger.Debug(
 			"responded with autoconfigure",
-			zap.String("mac", req.ClientHWAddr.String()),
-			zap.String("autoconfigure", ac.String()),
+			zap.Stringer("mac", req.ClientHWAddr),
+			zap.Stringer("autoconfigure", ac),
 		)
 		return next()
 	}
 
 	m.logger.Debug(
 		"client does not support autoconfigure",
-		zap.String("mac", req.ClientHWAddr.String()),
+		zap.Stringer("mac", req.ClientHWAddr),
 	)
 	// RFC2563 2.3: if no address is chosen for the host [...]
 	// If the DHCPDISCOVER does not contain the Auto-Configure option,

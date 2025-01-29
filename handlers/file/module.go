@@ -54,7 +54,6 @@ type Module struct {
 }
 
 func (m *Module) Provision(ctx caddy.Context) error {
-	ctx.Slogger()
 	m.logger = ctx.Logger()
 	m.recLock = &sync.RWMutex{}
 	// when auto refresh is enabled, watch the lease file for
@@ -68,15 +67,15 @@ func (m *Module) Provision(ctx caddy.Context) error {
 
 func (m *Module) Handle4(req, resp handlers.DHCPv4, next func() error) error {
 
-	m.logger.Debug("looking up an IP address for MAC", zap.String("mac", req.ClientHWAddr.String()))
+	m.logger.Debug("looking up an IP address for MAC", zap.Stringer("mac", req.ClientHWAddr))
 	ip, ok := m.lookup4(req.ClientHWAddr)
 	if !ok {
-		m.logger.Warn("MAC address is unknown", zap.String("mac", req.ClientHWAddr.String()))
+		m.logger.Warn("MAC address is unknown", zap.Stringer("mac", req.ClientHWAddr))
 		return next()
 	}
 
 	resp.YourIPAddr = ip
-	m.logger.Info("found IP address for MAC", zap.String("mac", req.ClientHWAddr.String()), zap.String("ip", ip.String()))
+	m.logger.Info("found IP address for MAC", zap.Stringer("mac", req.ClientHWAddr), zap.Stringer("ip", ip))
 	return next()
 }
 
@@ -86,7 +85,7 @@ func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 		return next()
 	}
 
-	duidOpt := req.GetOneOption(dhcpv6.OptionClientID).(dhcpv6.DUID)
+	duidOpt := req.Options.ClientID()
 	duid := hex.EncodeToString(duidOpt.ToBytes())
 
 	m.logger.Info("looking up an IP address for DUID", zap.String("duid", duid))
@@ -106,7 +105,7 @@ func (m *Module) Handle6(req, resp handlers.DHCPv6, next func() error) error {
 			},
 		}},
 	})
-	m.logger.Info("found IP address for DUID", zap.String("duid", duid), zap.String("ip", ip.String()))
+	m.logger.Info("found IP address for DUID", zap.String("duid", duid), zap.Stringer("ip", ip))
 	return next()
 }
 
@@ -157,8 +156,8 @@ func (m *Module) loadRecords() error {
 	}
 	m.logger.Info(fmt.Sprintf("loaded %d DHCPv4 leases and %d DHCPv6 leases", len(records4), len(records6)), zap.String("filename", m.Filename))
 
-	m.recLock.RLock()
-	defer m.recLock.RUnlock()
+	m.recLock.Lock()
+	defer m.recLock.Unlock()
 	m.records4 = records4
 	m.records6 = records6
 	return nil
