@@ -1,8 +1,12 @@
 # Caddy DHCP module
 
 This is a Caddy App module that starts a DHCP server.
+
 The handler modules are basically a rewritten version of the plugins of https://github.com/coredhcp/coredhcp/.
 Kudos to the CoreDHCP team for doing the heavy lifting.
+
+Configuration of this server is very similar to how Caddy's HTTP server is configured.
+Note that there is no adapter yet for a Caddyfile, so JSON is currently the only configuration method.
 
 ## Installation
 
